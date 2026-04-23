@@ -1,361 +1,456 @@
-// scraper.js — SUBM1T. smart scraper
+// scraper.js — SUBM1T. smart scraper v2
+// Strategy: only pull from sources with clean structured data
+// No more generic scraping of random page elements
 
 const cheerio = require('cheerio');
 
-// ── Junk detection ────────────────────────────────────────────────────────
-// Titles that are definitely not art opportunities
+// ── Validation ────────────────────────────────────────────────────────────
+
+const EXACT_JUNK = new Set([
+  'instagram','facebook','twitter','linkedin','pinterest','youtube','tiktok','bluesky',
+  'subscribe','newsletter','sign up','log in','login','register','contact us','about us',
+  'home','search','menu','navigation','back to top','read more','learn more','click here',
+  'privacy policy','terms of use','terms and conditions','cookie policy','accessibility',
+  'about us','our team','our work','our mission','who we are','what we do',
+  'programs','exhibitions','residencies','opportunities','resources','research','publications',
+  'facilities','directions','contact','events','news','press','donate','support us',
+  'membership','join','volunteers','staff','board','governance','partners','sponsors',
+  'shop','store','calendar','upcoming','past','archive','follow us',
+  'facebook logo','instagram logo','link to facebook','link to instagram',
+]);
 
 const JUNK_PATTERNS = [
-  /^follow us/i, /^subscribe/i, /^newsletter/i, /^sign up/i, /^log in/i,
-  /^login/i, /^register/i, /^contact us/i, /^about us/i, /^home$/i,
-  /^search$/i, /^menu$/i, /^navigation/i, /^skip to/i, /^back to/i,
-  /^share$/i, /^tweet$/i, /^facebook$/i, /^instagram$/i, /^twitter$/i,
-  /^youtube$/i, /^linkedin$/i, /^pinterest$/i, /^tiktok$/i,
-  /^get a /i, /^buy /i, /^shop /i, /^donate$/i, /^give now/i,
-  /^our campus/i, /^our mission/i, /^our team/i, /^our work/i,
-  /^press release/i, /^privacy policy/i, /^terms of/i, /^cookie/i,
-  /^copyright/i, /^all rights/i, /^powered by/i,
-  /^read more$/i, /^learn more$/i, /^click here$/i, /^more info/i,
-  /^loading/i, /^error/i, /^404/i, /^page not found/i,
-  /^\d+$/, // just a number
-  /^[^a-zA-Z]*$/, // no letters at all
+  /^(follow us|subscribe|newsletter|sign up|log in|register|contact|about|home|search|menu)/i,
+  /^(privacy|terms|cookie|accessibility|copyright|powered by)/i,
+  /^(facebook|instagram|twitter|linkedin|youtube|tiktok|bluesky|pinterest)/i,
+  /^(get a |buy |shop |donate|give now|click here|read more|learn more)/i,
+  /^(our campus|our mission|our team|press release|page not found)/i,
+  /^\d+$/,
+  /^[^a-zA-Z]*$/,
+  /robbreport|sportico|indiewire|wwd\s/i,
+  /lamborghini|ferrari|nfl|nba|nhl|mlb|nascar/i,
+  /\.st\d+\{/i,
+  /clip-path|fill-rule|clip-rule/i,
+  /^comment on /i,
+  /^exhibition just opened /i,
+  /^student show just opened /i,
+  /\d{1,2} [a-z]{3} 202\d\s*[–-]\s*\d{1,2} [a-z]{3} 202\d/i,
 ];
 
-// Words that strongly suggest it IS an art opportunity
-const OPPORTUNITY_SIGNALS = [
-  'open call', 'call for', 'residency', 'fellowship', 'grant', 'award',
-  'prize', 'exhibition', 'commission', 'competition', 'submit', 'submission',
-  'apply', 'application', 'artist', 'artwork', 'creative', 'proposal',
-  'opportunity', 'program', 'programme', 'scholarship', 'stipend',
-  'fund', 'support', 'emerging', 'studio', 'public art', 'mural',
-  'performance', 'installation', 'residences', 'retreat', 'workshop',
-  'cohort', 'incubator', 'accelerator', 'mentorship', 'showcase',
+// Title MUST contain at least one of these to pass
+const MUST_CONTAIN_ONE = [
+  'open call','call for','residency','fellowship','grant','award','prize',
+  'commission','competition','scholarship','stipend','artist-in-residence',
+  'air program','emerging artist','artist opportunity','apply','applications open',
+  'accepting applications','now accepting','seeking artists','juried',
+  'funded','paid opportunity','artist fund','artist grant',
 ];
 
-// Words that disqualify a result — not art-related
-const DISQUALIFY_WORDS = [
-  'mortgage', 'insurance', 'real estate', 'cryptocurrency', 'bitcoin',
-  'stock market', 'forex', 'trading', 'poker', 'casino', 'gambling',
-  'weight loss', 'diet pill', 'supplement', 'payday loan', 'cash advance',
-  'seo service', 'backlink', 'click here to win', 'you have been selected',
-  'birth certificate', 'passport', 'visa application', 'immigration',
-  'plumber', 'electrician', 'roofing', 'pest control', 'car insurance',
-];
-
-function isJunkTitle(title) {
-  if (!title || title.length < 8 || title.length > 300) return true;
-  if (JUNK_PATTERNS.some(p => p.test(title.trim()))) return true;
-  return false;
+function isTitleValid(title) {
+  if (!title) return false;
+  const t = title.trim();
+  if (t.length < 10 || t.length > 250) return false;
+  if (EXACT_JUNK.has(t.toLowerCase())) return false;
+  if (JUNK_PATTERNS.some(p => p.test(t))) return false;
+  return true;
 }
 
-function isRelevant(title, bodyText) {
+function hasOpportunitySignal(title, bodyText) {
   const combined = (title + ' ' + (bodyText || '')).toLowerCase();
-
-  // Hard disqualify
-  if (DISQUALIFY_WORDS.some(w => combined.includes(w))) return false;
-
-  // Must have at least one opportunity signal in title OR body
-  const titleLower = title.toLowerCase();
-  const hasSignal =
-    OPPORTUNITY_SIGNALS.some(s => titleLower.includes(s)) ||
-    OPPORTUNITY_SIGNALS.some(s => combined.includes(s));
-
-  return hasSignal;
+  return MUST_CONTAIN_ONE.some(kw => combined.includes(kw));
 }
-
-// ── Fee detection ─────────────────────────────────────────────────────────
-
-const FEE_PHRASES = [
-  'application fee', 'entry fee', 'submission fee', 'processing fee',
-  'admin fee', 'jury fee', 'entry cost', 'registration fee',
-  'handling fee', 'reading fee',
-];
-const FREE_PHRASES = [
-  'no fee', 'free to apply', 'no application fee', 'free entry',
-  'no entry fee', 'no cost to apply', 'free of charge', 'waived fee',
-  'no submission fee', 'fee-free', 'feefree',
-];
 
 function detectFee(text) {
   const t = (text || '').toLowerCase();
-  if (FREE_PHRASES.some(p => t.includes(p))) return false;
-  if (FEE_PHRASES.some(p => t.includes(p))) return true;
+  const FREE = ['no fee','free to apply','no application fee','free entry','no entry fee','no cost to apply','waived fee','no submission fee'];
+  const FEE  = ['application fee','entry fee','submission fee','processing fee','registration fee','reading fee','jury fee'];
+  if (FREE.some(p => t.includes(p))) return false;
+  if (FEE.some(p => t.includes(p))) return true;
   if (/\$\s*\d+/.test(t) && t.includes('fee')) return true;
-  return null; // unknown — include by default (we only exclude confirmed fees)
+  return null;
 }
-
-// ── Deadline parsing ──────────────────────────────────────────────────────
 
 function parseDeadline(text) {
   if (!text) return null;
   const patterns = [
+    /deadline[:\s]+([A-Za-z]+ \d{1,2},?\s*202[5-9])/i,
+    /due[:\s]+([A-Za-z]+ \d{1,2},?\s*202[5-9])/i,
+    /closes?[:\s]+([A-Za-z]+ \d{1,2},?\s*202[5-9])/i,
     /(\d{4}-\d{2}-\d{2})/,
-    /deadline[:\s]+([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
-    /due[:\s]+([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
-    /closes?[:\s]+([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
-    /([A-Za-z]+ \d{1,2},?\s*202[4-9])/,
-    /([A-Za-z]+ \d{1,2},?\s*203\d)/,
+    /([A-Za-z]+ \d{1,2},?\s*202[5-9])/,
   ];
   for (const pat of patterns) {
     const m = text.match(pat);
     if (m) {
-      const d = new Date(m[1]);
+      const d = new Date(m[1] || m[0]);
       if (!isNaN(d) && d > new Date()) return d.toISOString().slice(0, 10);
     }
   }
   return null;
 }
 
-// ── Clean and validate a candidate opportunity ────────────────────────────
-
-function validateOpp(opp) {
-  if (!opp || !opp.title) return null;
-
-  const title = opp.title.trim().replace(/\s+/g, ' ');
-
-  if (isJunkTitle(title)) return null;
-  if (!isRelevant(title, opp.bodyText || '')) return null;
-  if (detectFee(opp.bodyText || '') === true) return null; // confirmed fee = skip
-
-  // Deadline in the past = skip (unless null)
-  if (opp.deadline) {
-    const d = new Date(opp.deadline);
-    if (!isNaN(d) && d < new Date()) return null;
-  }
-
+function makeOpp({ title, type, location, deadline, link, source, bodyText, tags }) {
+  title = (title || '').trim().replace(/\s+/g, ' ');
+  if (!isTitleValid(title)) return null;
+  if (!hasOpportunitySignal(title, bodyText)) return null;
+  if (detectFee(bodyText) === true) return null;
+  if (deadline && new Date(deadline) < new Date()) return null;
   return {
-    title,
-    type:     opp.type     || 'open_call',
-    location: opp.location || null,
-    deadline: opp.deadline || null,
-    link:     opp.link     || null,
-    has_fee:  false,
-    tags:     opp.tags     || [],
-    source:   opp.source   || 'unknown',
+    title, type: type || 'open_call', location: location || null,
+    deadline: deadline || null, link: link || null, has_fee: false,
+    tags: tags || [], source: source || 'unknown',
   };
 }
 
-// ── Site-specific parsers ─────────────────────────────────────────────────
-// These target the ACTUAL listing elements on each page, not nav/footer junk
-
-async function scrapeEFlux(fetch) {
-  try {
-    const html = await (await fetch('https://www.e-flux.com/announcements/', {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SUBM1T-bot/1.0)' }
-    })).text();
-    const $ = cheerio.load(html);
-    const results = [];
-
-    // e-flux uses article elements with specific class
-    $('article, .article, [class*="announcement"]').each((_, el) => {
-      const title = $(el).find('h1, h2, h3, .title, [class*="title"]').first().text().trim();
-      const body  = $(el).text();
-      const link  = $(el).find('a').first().attr('href');
-      const validated = validateOpp({
-        title, bodyText: body, source: 'e-flux', type: 'open_call',
-        deadline: parseDeadline(body),
-        link: link?.startsWith('http') ? link : link ? `https://www.e-flux.com${link}` : null,
-      });
-      if (validated) results.push(validated);
-    });
-    return results;
-  } catch(e) { console.warn('[e-flux] failed:', e.message); return []; }
+function dedup(arr) {
+  const seen = new Set();
+  return arr.filter(o => {
+    if (!o) return false;
+    const key = o.title.toLowerCase().slice(0, 80);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
-async function scrapeNYFA(fetch) {
+// ═══════════════════════════════════════════════════════════════════════════
+// SCRAPERS — each targets only structured listing elements
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function scrapeSubmittable(fetch) {
   try {
-    const html = await (await fetch('https://www.nyfa.org/awards-grants/', {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SUBM1T-bot/1.0)' }
+    const res = await fetch(
+      'https://api.submittable.com/v1/public-listings?category=visual-art&hasFee=false&size=100',
+      { headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' } }
+    );
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const json = await res.json();
+    const items = json.items || json.listings || json.data || [];
+    return dedup(items.map(item => makeOpp({
+      title:    item.title || item.name,
+      type:     'open_call',
+      location: item.country || item.location || null,
+      deadline: item.closeDate || item.deadline || null,
+      link:     item.url || item.submissionUrl || `https://submittable.com/submit/${item.id}`,
+      source:   'Submittable',
+      bodyText: (item.description || '') + ' call for submissions free to apply',
+      tags:     ['visual_art'],
+    })).filter(Boolean));
+  } catch(e) { console.warn('[Submittable] failed:', e.message); return []; }
+}
+
+async function scrapeGrantsArt(fetch) {
+  try {
+    const res = await fetch('https://grants.art/api/grants?status=open&limit=200', {
+      headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const json = await res.json();
+    const items = Array.isArray(json) ? json : (json.grants || json.data || []);
+    return dedup(items.map(item => {
+      if (item.fee && item.fee > 0) return null;
+      return makeOpp({
+        title:    item.name || item.title,
+        type:     'grant',
+        location: item.location || 'USA',
+        deadline: item.deadline || item.due_date || null,
+        link:     item.url || item.link || null,
+        source:   'Grants.art',
+        bodyText: (item.description || '') + ' grant award artist fellowship free to apply',
+        tags:     ['grant'],
+      });
+    }).filter(Boolean));
+  } catch(e) { console.warn('[Grants.art] failed:', e.message); return []; }
+}
+
+async function scrapeNYFASource(fetch) {
+  try {
+    const html = await (await fetch('https://source.nyfa.org/content/opportunity/?sort=date', {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
     })).text();
     const $ = cheerio.load(html);
+    $('nav, footer, header, script, style').remove();
     const results = [];
-
-    // NYFA listing items
-    $('article, .opportunity, .grant-item, .post, .listing-item').each((_, el) => {
-      const title = $(el).find('h2, h3, h4, .entry-title, a').first().text().trim();
-      const body  = $(el).text();
-      const link  = $(el).find('a').first().attr('href');
-      const validated = validateOpp({
-        title, bodyText: body, source: 'NYFA', type: 'grant', location: 'USA',
+    $('.opportunity-listing, .listing-item, article.post, .entry, .views-row').each((_, el) => {
+      const title    = $(el).find('h2, h3, .title, .entry-title').first().text().trim();
+      const body     = $(el).text();
+      const link     = $(el).find('a').first().attr('href');
+      const opp = makeOpp({
+        title, bodyText: body, source: 'NYFA Source', type: 'open_call', location: 'USA',
         deadline: parseDeadline(body),
-        link: link?.startsWith('http') ? link : link ? `https://www.nyfa.org${link}` : null,
+        link: link?.startsWith('http') ? link : link ? `https://source.nyfa.org${link}` : null,
       });
-      if (validated) results.push(validated);
+      if (opp) results.push(opp);
     });
-    return results;
-  } catch(e) { console.warn('[NYFA] failed:', e.message); return []; }
+    return dedup(results);
+  } catch(e) { console.warn('[NYFA Source] failed:', e.message); return []; }
+}
+
+async function scrapeResArtis(fetch) {
+  try {
+    const html = await (await fetch('https://www.resartis.org/residencies/?availability=open', {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    })).text();
+    const $ = cheerio.load(html);
+    $('nav, footer, header, script, style').remove();
+    const results = [];
+    $('.residency-item, .residence-card, article, .listing-card, .grid-item').each((_, el) => {
+      const title    = $(el).find('h2, h3, h4, .title').first().text().trim();
+      const body     = $(el).text();
+      const link     = $(el).find('a').first().attr('href');
+      const location = $(el).find('.location, .country').first().text().trim() || null;
+      const opp = makeOpp({
+        title, bodyText: body + ' residency artist-in-residence',
+        source: 'ResArtis', type: 'residency', location,
+        deadline: parseDeadline(body),
+        link: link?.startsWith('http') ? link : link ? `https://www.resartis.org${link}` : null,
+      });
+      if (opp) results.push(opp);
+    });
+    return dedup(results);
+  } catch(e) { console.warn('[ResArtis] failed:', e.message); return []; }
+}
+
+async function scrapeAAC(fetch) {
+  try {
+    const html = await (await fetch('https://www.artistcommunities.org/residencies/find-a-residency', {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    })).text();
+    const $ = cheerio.load(html);
+    $('nav, footer, header, script, style').remove();
+    const results = [];
+    $('.views-row, .residency-item, article, .node').each((_, el) => {
+      const title    = $(el).find('h2, h3, .field-title, a').first().text().trim();
+      const body     = $(el).text();
+      const link     = $(el).find('a').first().attr('href');
+      const location = $(el).find('.location, .state, .country').first().text().trim() || 'USA';
+      const opp = makeOpp({
+        title, bodyText: body + ' residency artist-in-residence fellowship',
+        source: 'Alliance of Artists Communities', type: 'residency', location,
+        deadline: parseDeadline(body),
+        link: link?.startsWith('http') ? link : link ? `https://www.artistcommunities.org${link}` : null,
+      });
+      if (opp) results.push(opp);
+    });
+    return dedup(results);
+  } catch(e) { console.warn('[AAC] failed:', e.message); return []; }
 }
 
 async function scrapeCaFE(fetch) {
   try {
     const html = await (await fetch('https://www.callforentry.org/festivals_unique_listing.php', {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SUBM1T-bot/1.0)' }
+      headers: { 'User-Agent': 'Mozilla/5.0' }
     })).text();
     const $ = cheerio.load(html);
+    $('nav, footer, header, script, style').remove();
     const results = [];
-
-    // CaFÉ table rows
-    $('tr, .listing-row, [class*="event"]').each((_, el) => {
-      const title = $(el).find('.title, h3, td:first-child, a').first().text().trim();
+    $('tr').each((_, el) => {
+      const cells = $(el).find('td');
+      if (cells.length < 2) return;
+      const title = $(cells[0]).text().trim();
       const body  = $(el).text();
       const link  = $(el).find('a').first().attr('href');
-      if (!title || title.length < 5) return;
-      const fee = detectFee(body);
-      if (fee === true) return;
-      const validated = validateOpp({
-        title, bodyText: body, source: 'CaFÉ', type: 'open_call',
+      if (detectFee(body) === true) return;
+      const opp = makeOpp({
+        title, bodyText: body + ' open call juried exhibition',
+        source: 'CaFÉ', type: 'open_call', location: 'USA',
         deadline: parseDeadline(body),
-        link: link || 'https://www.callforentry.org',
+        link: link?.startsWith('http') ? link : link ? `https://www.callforentry.org${link}` : null,
       });
-      if (validated) results.push(validated);
+      if (opp) results.push(opp);
     });
-    return results;
+    return dedup(results);
   } catch(e) { console.warn('[CaFÉ] failed:', e.message); return []; }
 }
 
-// ── Generic scraper — only grabs from content areas, skips nav/footer ─────
-
-async function scrapeGeneric(fetch, siteConfig) {
+async function scrapeEFlux(fetch) {
   try {
-    const html = await (await fetch(siteConfig.url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SUBM1T-bot/1.0; +https://subm1t.art)' },
-      timeout: 10000,
+    const html = await (await fetch('https://www.e-flux.com/announcements/tag/open-calls/', {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
     })).text();
+    const $ = cheerio.load(html);
+    $('nav, footer, header, script, style').remove();
+    const results = [];
+    $('article, [class*="item"]').each((_, el) => {
+      const title = $(el).find('h1, h2, h3, .title').first().text().trim();
+      const body  = $(el).text();
+      const link  = $(el).find('a').first().attr('href');
+      const opp = makeOpp({
+        title, bodyText: body, source: 'e-flux', type: 'open_call',
+        deadline: parseDeadline(body),
+        link: link?.startsWith('http') ? link : link ? `https://www.e-flux.com${link}` : null,
+      });
+      if (opp) results.push(opp);
+    });
+    return dedup(results);
+  } catch(e) { console.warn('[e-flux] failed:', e.message); return []; }
+}
 
+async function scrapeArtconnect(fetch) {
+  try {
+    const html = await (await fetch('https://www.artconnect.com/opportunities?type=open-call&fee=free', {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    })).text();
+    const $ = cheerio.load(html);
+    $('nav, footer, header, script, style').remove();
+    const results = [];
+    $('[class*="opportunity"], [class*="card"], article, .listing').each((_, el) => {
+      const title    = $(el).find('h2, h3, h4, [class*="title"]').first().text().trim();
+      const body     = $(el).text();
+      const link     = $(el).find('a').first().attr('href');
+      const location = $(el).find('[class*="location"]').first().text().trim() || null;
+      if (detectFee(body) === true) return;
+      const opp = makeOpp({
+        title, bodyText: body, source: 'Artconnect', type: 'open_call', location,
+        deadline: parseDeadline(body),
+        link: link?.startsWith('http') ? link : link ? `https://www.artconnect.com${link}` : null,
+      });
+      if (opp) results.push(opp);
+    });
+    return dedup(results);
+  } catch(e) { console.warn('[Artconnect] failed:', e.message); return []; }
+}
+
+async function scrapeTransArtists(fetch) {
+  try {
+    const html = await (await fetch('https://www.transartists.org/en/residencies?field_fees_value=0', {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    })).text();
+    const $ = cheerio.load(html);
+    $('nav, footer, header, script, style').remove();
+    const results = [];
+    $('.views-row, .residency, article').each((_, el) => {
+      const title    = $(el).find('h2, h3, .views-field-title, a').first().text().trim();
+      const body     = $(el).text();
+      const link     = $(el).find('a').first().attr('href');
+      const location = $(el).find('.views-field-field-country, .country').first().text().trim() || null;
+      const opp = makeOpp({
+        title, bodyText: body + ' residency artist-in-residence',
+        source: 'TransArtists', type: 'residency', location,
+        deadline: parseDeadline(body),
+        link: link?.startsWith('http') ? link : link ? `https://www.transartists.org${link}` : null,
+      });
+      if (opp) results.push(opp);
+    });
+    return dedup(results);
+  } catch(e) { console.warn('[TransArtists] failed:', e.message); return []; }
+}
+
+// Individual program pages — single focused opportunity per page
+const SINGLE_PROGRAM_PAGES = [
+  { url:'https://www.macdowell.org/apply',                               type:'residency', source:'MacDowell',                       location:'New Hampshire', signal:'fellowship residency artist-in-residence apply' },
+  { url:'https://www.yaddo.org/apply/',                                  type:'residency', source:'Yaddo',                           location:'New York',      signal:'residency artist fellowship apply' },
+  { url:'https://headlands.org/program/air/',                            type:'residency', source:'Headlands Center',                location:'California',    signal:'residency artist-in-residence' },
+  { url:'https://ucross.org/residency-program/',                         type:'residency', source:'Ucross Foundation',               location:'Wyoming',       signal:'residency artist apply fellowship' },
+  { url:'https://ragdale.org/residency/',                                type:'residency', source:'Ragdale',                         location:'Illinois',      signal:'residency artist fellowship apply' },
+  { url:'https://millayarts.org/apply/',                                 type:'residency', source:'Millay Arts',                     location:'New York',      signal:'residency artist fellowship apply' },
+  { url:'https://www.hambidge.org/residency/',                           type:'residency', source:'Hambidge Center',                 location:'Georgia',       signal:'residency fellowship artist apply' },
+  { url:'https://ox-bow.org/residency/',                                 type:'residency', source:'Ox-Bow',                          location:'Michigan',      signal:'residency artist-in-residence apply' },
+  { url:'https://artomi.org/residencies/',                               type:'residency', source:'Art Omi',                         location:'New York',      signal:'residency artist open call apply' },
+  { url:'https://djerassi.org/apply/',                                   type:'residency', source:'Djerassi',                        location:'California',    signal:'residency artist-in-residence apply' },
+  { url:'https://www.vermontstudiocenter.org/fellowships-grants/',       type:'residency', source:'Vermont Studio Center',           location:'Vermont',       signal:'fellowship residency grant artist apply' },
+  { url:'https://centrum.org/residencies/',                              type:'residency', source:'Centrum',                         location:'Washington',    signal:'residency artist fellowship apply' },
+  { url:'https://montalvoarts.org/programs/sar/',                        type:'residency', source:'Montalvo Arts',                   location:'California',    signal:'residency artist apply fellowship' },
+  { url:'https://pioneerworks.org/residency/',                           type:'residency', source:'Pioneer Works',                   location:'New York',      signal:'residency artist-in-residence apply' },
+  { url:'https://www.andersonranch.org/programs/artist-in-residence/',   type:'residency', source:'Anderson Ranch',                  location:'Colorado',      signal:'residency artist-in-residence' },
+  { url:'https://www.bemiscenter.org/residencies/',                      type:'residency', source:'Bemis Center',                    location:'Nebraska',      signal:'residency artist-in-residence apply' },
+  { url:'https://www.narsfoundation.org/international-residency-program/', type:'residency', source:'NARS Foundation',              location:'New York',      signal:'residency artist-in-residence apply' },
+  { url:'https://efanyc.org/studio-program/',                            type:'residency', source:'Elizabeth Foundation for the Arts', location:'New York',   signal:'residency studio artist apply' },
+  { url:'https://www.wavehill.org/arts/residency/',                      type:'residency', source:'Wave Hill',                       location:'New York',      signal:'residency artist fellowship apply' },
+  { url:'https://massmoca.org/opportunity/',                             type:'open_call', source:'MASS MoCA',                       location:'Massachusetts', signal:'open call artist residency apply' },
+  { url:'https://www.aarome.org/apply/',                                 type:'residency', source:'American Academy in Rome',        location:'Italy',         signal:'fellowship residency artist apply prize' },
+  { url:'https://civitella.org/apply/',                                  type:'residency', source:'Civitella Ranieri',               location:'Italy',         signal:'residency fellowship artist apply' },
+  { url:'https://www.bfny.org/en/apply/',                                type:'residency', source:'Bogliasco Foundation',            location:'Italy',         signal:'fellowship residency apply' },
+  { url:'https://www.akademie-solitude.de/en/apply/',                    type:'residency', source:'Schloss Solitude',                location:'Germany',       signal:'fellowship residency artist apply' },
+  { url:'https://prohelvetia.ch/en/funding/',                            type:'grant',     source:'Pro Helvetia',                    location:'Switzerland',   signal:'grant funding artist apply fellowship' },
+  { url:'https://pkf.org/apply/',                                        type:'grant',     source:'Pollock-Krasner Foundation',      location:'USA',           signal:'grant artist apply award fellowship' },
+  { url:'https://www.foundationforcontemporaryarts.org/grants/',         type:'grant',     source:'Foundation for Contemporary Arts', location:'USA',          signal:'grant artist fellowship award apply' },
+  { url:'https://creative-capital.org/apply/',                           type:'grant',     source:'Creative Capital',                location:'USA',           signal:'grant award artist apply fellowship' },
+  { url:'https://artadia.org/apply/',                                    type:'grant',     source:'Artadia',                         location:'USA',           signal:'grant award artist apply' },
+  { url:'https://www.joanmitchellfoundation.org/grants',                 type:'grant',     source:'Joan Mitchell Foundation',        location:'USA',           signal:'grant artist fellowship apply award' },
+  { url:'https://www.jeromefdn.org/apply',                               type:'grant',     source:'Jerome Foundation',               location:'USA',           signal:'grant fellowship artist apply' },
+  { url:'https://www.collegeart.org/opportunities/',                     type:'open_call', source:'College Art Association',         location:'USA',           signal:'open call grant fellowship opportunity award' },
+  { url:'https://projectrowhouses.org/round/',                           type:'open_call', source:'Project Row Houses',              location:'Houston',       signal:'open call artist apply round' },
+  { url:'https://smackmellon.org/opportunities/',                        type:'open_call', source:'Smack Mellon',                    location:'New York',      signal:'open call artist opportunity apply' },
+  { url:'https://socratessculpturepark.org/emerging-artist-fellowship/', type:'open_call', source:'Socrates Sculpture Park',         location:'New York',      signal:'fellowship emerging artist apply' },
+  { url:'https://www.bronxmuseum.org/programs/aim/',                     type:'open_call', source:'Bronx Museum AIM',               location:'New York',      signal:'open call artist apply emerging' },
+  { url:'https://www.bricartsmedia.org/open-calls',                      type:'open_call', source:'BRIC Arts',                       location:'New York',      signal:'open call artist apply' },
+  { url:'https://massculturalcouncil.org/organizations/grants/',         type:'grant',     source:'Mass Cultural Council',           location:'Massachusetts', signal:'grant artist apply fellowship' },
+  { url:'https://arts.ca.gov/grants/',                                   type:'grant',     source:'California Arts Council',         location:'California',    signal:'grant artist apply fellowship' },
+  { url:'https://www.arts.texas.gov/programs/',                          type:'grant',     source:'Texas Commission on the Arts',    location:'Texas',         signal:'grant artist apply fellowship' },
+  { url:'https://oac.ohio.gov/Grantees-and-Partners/Funding-Opportunities', type:'grant', source:'Ohio Arts Council',               location:'Ohio',          signal:'grant artist apply fellowship' },
+  { url:'https://www.ncarts.org/grants/',                                type:'grant',     source:'NC Arts Council',                 location:'North Carolina', signal:'grant artist apply fellowship' },
+  { url:'https://www.oregonartscommission.org/grants',                   type:'grant',     source:'Oregon Arts Commission',          location:'Oregon',        signal:'grant artist apply fellowship' },
+  { url:'https://www.arts.wa.gov/grants/',                               type:'grant',     source:'Washington State Arts',           location:'Washington',    signal:'grant artist apply fellowship' },
+  { url:'https://azarts.gov/grants/',                                    type:'grant',     source:'Arizona Commission on the Arts',  location:'Arizona',       signal:'grant artist apply fellowship' },
+  { url:'https://www.hcponline.org/programs/grants/',                    type:'grant',     source:'Houston Center for Photography',  location:'Houston',       signal:'grant fellowship artist photography apply' },
+  { url:'https://cpw.org/programs/fellowships/',                         type:'grant',     source:'Center for Photography Woodstock', location:'New York',     signal:'fellowship grant photography artist apply' },
+];
+
+async function scrapeSinglePage(fetch, config) {
+  try {
+    const html = await (await fetch(config.url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    })).text();
     const $ = cheerio.load(html);
 
-    // Remove nav, footer, header, sidebar — these produce junk titles
-    $('nav, footer, header, aside, .nav, .footer, .header, .sidebar, .menu, .navigation, .breadcrumb, .pagination, script, style, noscript').remove();
+    // Aggressively remove navigation and junk
+    $('nav, footer, header, aside, .nav, .footer, .header, .sidebar, .menu, .navigation, .breadcrumb, script, style, noscript, [class*="social"], [class*="share"], [id*="nav"], [id*="footer"], [id*="header"]').remove();
 
+    const main = $('main, [role="main"], #content, #main, .main-content, .page-content').first();
+    const root = main.length ? main : $('body');
     const results = [];
 
-    // Try to find the main content area first
-    const contentArea = $('main, [role="main"], #content, #main, .content, .main, article').first();
-    const root = contentArea.length ? contentArea : $('body');
+    const listingSelectors = [
+      'article', '[class*="opportunity"]', '[class*="program"]', '[class*="grant"]',
+      '[class*="residency"]', '[class*="fellowship"]', '[class*="listing"]',
+      '[class*="card"]', 'li.program', 'li.grant', 'li.opportunity',
+    ].join(', ');
 
-    // Only grab elements that look like list items or cards, not raw paragraphs
-    const selectors = siteConfig.selector ||
-      'article, .opportunity, .grant, .residency, .fellowship, .award, .call, .listing, .post, li.item, .card, [class*="opportunity"], [class*="grant"], [class*="residency"], [class*="listing"], [class*="call-for"]';
-
-    root.find(selectors).each((_, el) => {
-      const title = $(el).find(
-        siteConfig.titleSelector || 'h1, h2, h3, h4, .title, [class*="title"], a'
-      ).first().text().trim();
-
+    root.find(listingSelectors).each((_, el) => {
+      const title = $(el).find('h1, h2, h3, h4, [class*="title"]').first().text().trim();
+      if (!title || title.length < 10) return;
       const body = $(el).text();
-      const rawLink = $(el).find('a').first().attr('href') || '';
-      const link = rawLink.startsWith('http')
-        ? rawLink
-        : rawLink ? `${new URL(siteConfig.url).origin}${rawLink}` : null;
-
-      const validated = validateOpp({
-        title, bodyText: body,
-        source:   siteConfig.name,
-        type:     siteConfig.type     || 'open_call',
-        location: siteConfig.location || null,
-        tags:     siteConfig.tags     || [],
+      const link = $(el).find('a').first().attr('href');
+      const opp  = makeOpp({
+        title, bodyText: body + ' ' + config.signal,
+        source: config.source, type: config.type, location: config.location,
         deadline: parseDeadline(body),
-        link,
+        link: link?.startsWith('http') ? link : link ? new URL(link, config.url).href : config.url,
       });
-
-      if (validated) results.push(validated);
+      if (opp) results.push(opp);
     });
 
-    // Deduplicate by title within this site's results
-    const seen = new Set();
-    return results.filter(r => {
-      const key = r.title.toLowerCase().slice(0, 60);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    // Fallback: use the page h1 as the opportunity title
+    if (results.length === 0) {
+      const pageTitle = $('h1').first().text().trim() || $('title').text().trim().split(/[|\-–]/)[0].trim();
+      const bodyText  = root.text();
+      const opp = makeOpp({
+        title: pageTitle, bodyText: bodyText + ' ' + config.signal,
+        source: config.source, type: config.type, location: config.location,
+        deadline: parseDeadline(bodyText),
+        link: config.url,
+      });
+      if (opp) results.push(opp);
+    }
 
+    return dedup(results);
   } catch(e) {
-    console.warn(`[${siteConfig.name}] failed:`, e.message);
+    console.warn(`[${config.source}] failed:`, e.message);
     return [];
   }
 }
 
-// ── Site list ─────────────────────────────────────────────────────────────
-
-const GENERIC_SITES = [
-  { name:'Alliance of Artists Communities', url:'https://www.artistcommunities.org/opportunities', type:'residency' },
-  { name:'TransArtists', url:'https://www.transartists.org/en/residencies', type:'residency' },
-  { name:'MacDowell', url:'https://www.macdowell.org/apply', type:'residency', tags:['residency'] },
-  { name:'Yaddo', url:'https://www.yaddo.org/apply/', type:'residency' },
-  { name:'Headlands', url:'https://headlands.org/program/air/', type:'residency' },
-  { name:'Skowhegan', url:'https://www.skowheganart.org/about/apply/', type:'residency' },
-  { name:'Ucross', url:'https://ucross.org/residency-program/', type:'residency' },
-  { name:'Vermont Studio Center', url:'https://www.vermontstudiocenter.org/fellowships-grants/', type:'residency' },
-  { name:'Ragdale', url:'https://ragdale.org/residency/', type:'residency' },
-  { name:'Pioneer Works', url:'https://pioneerworks.org/residency/', type:'residency' },
-  { name:'Rhizome', url:'https://rhizome.org/opportunities/', type:'open_call' },
-  { name:'Hyperallergic', url:'https://hyperallergic.com/opportunities/', type:'open_call' },
-  { name:'Frieze', url:'https://www.frieze.com/jobs-and-opportunities', type:'open_call' },
-  { name:'Artconnect', url:'https://www.artconnect.com/opportunities', type:'open_call' },
-  { name:'NEA', url:'https://www.arts.gov/grants', type:'grant', tags:['grant'], location:'USA' },
-  { name:'Pollock-Krasner', url:'https://pkf.org/apply/', type:'grant', location:'USA' },
-  { name:'Foundation Contemporary Arts', url:'https://www.foundationforcontemporaryarts.org/grants/', type:'grant' },
-  { name:'Creative Capital', url:'https://creative-capital.org/apply/', type:'grant' },
-  { name:'Artadia', url:'https://artadia.org/apply/', type:'grant' },
-  { name:'Joan Mitchell Foundation', url:'https://www.joanmitchellfoundation.org/grants', type:'grant' },
-  { name:'Jerome Foundation', url:'https://www.jeromefdn.org/apply', type:'grant' },
-  { name:'College Art Association', url:'https://www.collegeart.org/opportunities/', type:'open_call' },
-  { name:'Wooloo', url:'https://wooloo.org/open-calls/', type:'open_call' },
-  { name:'On the Move', url:'https://www.on-the-move.org/grants/', type:'grant' },
-  { name:'Arts Council England', url:'https://www.artscouncil.org.uk/our-open-funds', type:'grant', location:'UK' },
-  { name:'Arts Council Ireland', url:'https://www.artscouncil.ie/Funds/', type:'grant', location:'Ireland' },
-  { name:'Canada Council', url:'https://canadacouncil.ca/funding', type:'grant', location:'Canada' },
-  { name:'Australia Council', url:'https://www.australiacouncil.gov.au/funding/', type:'grant', location:'Australia' },
-  { name:'American Academy Rome', url:'https://www.aarome.org/apply/', type:'residency', location:'Italy' },
-  { name:'Civitella Ranieri', url:'https://civitella.org/apply/', type:'residency', location:'Italy' },
-  { name:'Schloss Solitude', url:'https://www.akademie-solitude.de/en/apply/', type:'residency', location:'Germany' },
-  { name:'Djerassi', url:'https://djerassi.org/apply/', type:'residency', location:'USA' },
-  { name:'MASS MoCA', url:'https://massmoca.org/opportunity/', type:'residency', location:'USA' },
-  { name:'Art Omi', url:'https://artomi.org/residencies/', type:'residency', location:'New York' },
-  { name:'NYSCA', url:'https://www.nysca.org/public/guidelines/', type:'grant', location:'New York' },
-  { name:'Mass Cultural Council', url:'https://massculturalcouncil.org/organizations/grants/', type:'grant', location:'Massachusetts' },
-  { name:'California Arts Council', url:'https://arts.ca.gov/grants/', type:'grant', location:'California' },
-  { name:'Texas Commission Arts', url:'https://www.arts.texas.gov/programs/', type:'grant', location:'Texas' },
-  { name:'Illinois Arts Council', url:'https://arts.illinois.gov/grants-programs', type:'grant', location:'Illinois' },
-  { name:'Ohio Arts Council', url:'https://oac.ohio.gov/Grantees-and-Partners/Funding-Opportunities', type:'grant', location:'Ohio' },
-  { name:'Florida Division Arts', url:'https://dos.fl.gov/cultural/grants/', type:'grant', location:'Florida' },
-  { name:'NC Arts Council', url:'https://www.ncarts.org/grants/', type:'grant', location:'North Carolina' },
-  { name:'Oregon Arts Commission', url:'https://www.oregonartscommission.org/grants', type:'grant', location:'Oregon' },
-  { name:'Washington State Arts', url:'https://www.arts.wa.gov/grants/', type:'grant', location:'Washington' },
-  { name:'Arizona Commission Arts', url:'https://azarts.gov/grants/', type:'grant', location:'Arizona' },
-  { name:'Houston Center Photography', url:'https://www.hcponline.org/programs/grants/', type:'grant', location:'Houston', tags:['photography'] },
-  { name:'Center Photography Woodstock', url:'https://cpw.org/programs/fellowships/', type:'grant', tags:['photography'] },
-  { name:'National Arts Club', url:'https://nationalartsclub.org/opportunities', type:'open_call' },
-  { name:'Bemis Center', url:'https://www.bemiscenter.org/residencies/', type:'residency', location:'Omaha' },
-  { name:'Project Row Houses', url:'https://projectrowhouses.org/round/', type:'open_call', location:'Houston' },
-  { name:'BRIC Arts', url:'https://www.bricartsmedia.org/open-calls', type:'open_call', location:'New York' },
-  { name:'Smack Mellon', url:'https://smackmellon.org/opportunities/', type:'open_call', location:'New York' },
-  { name:'Socrates Sculpture Park', url:'https://socratessculpturepark.org/emerging-artist-fellowship/', type:'open_call', location:'New York' },
-  { name:'AIM Bronx Museum', url:'https://www.bronxmuseum.org/programs/aim/', type:'open_call', location:'New York' },
-  { name:'Flux Factory', url:'https://www.fluxfactory.org/open-calls/', type:'open_call', location:'New York' },
-  { name:'NARS Foundation', url:'https://www.narsfoundation.org/international-residency-program/', type:'residency', location:'New York' },
-  { name:'Elizabeth Foundation Arts', url:'https://efanyc.org/studio-program/', type:'residency', location:'New York' },
-  { name:'Hambidge Center', url:'https://www.hambidge.org/residency/', type:'residency', location:'Georgia' },
-  { name:'Anderson Ranch', url:'https://www.andersonranch.org/programs/artist-in-residence/', type:'residency' },
-  { name:'Ox-Bow', url:'https://ox-bow.org/residency/', type:'residency', location:'Michigan' },
-  { name:'Wave Hill', url:'https://www.wavehill.org/arts/residency/', type:'residency', location:'New York' },
-  { name:'Montalvo Arts', url:'https://montalvoarts.org/programs/sar/', type:'residency', location:'California' },
-  { name:'Centrum', url:'https://centrum.org/residencies/', type:'residency', location:'Washington' },
-  { name:'Millay Arts', url:'https://millayarts.org/apply/', type:'residency', location:'New York' },
-  { name:'Cité des Arts', url:'https://www.citedesartsparis.fr/en/calls-for-applications', type:'residency', location:'France' },
-  { name:'Bogliasco Foundation', url:'https://www.bfny.org/en/apply/', type:'residency', location:'Italy' },
-  { name:'Camargo Foundation', url:'https://camargoproject.org/apply/', type:'residency', location:'France' },
-  { name:'IASPIS', url:'https://iaspis.se/en/apply/', type:'residency', location:'Sweden' },
-  { name:'Pro Helvetia', url:'https://prohelvetia.ch/en/funding/', type:'grant', location:'Switzerland' },
-];
-
 module.exports = {
-  scrapeEFlux,
-  scrapeNYFA,
+  scrapeSubmittable,
+  scrapeGrantsArt,
+  scrapeNYFASource,
+  scrapeResArtis,
+  scrapeAAC,
   scrapeCaFE,
-  scrapeGeneric,
-  GENERIC_SITES,
-  validateOpp,
-  detectFee,
+  scrapeEFlux,
+  scrapeArtconnect,
+  scrapeTransArtists,
+  scrapeSinglePage,
+  SINGLE_PROGRAM_PAGES,
 };
