@@ -1,9 +1,12 @@
 {
   "name": "subm1t-scraper",
-  "version": "1.0.0",
+  "version": "2.0.0",
+  "description": "Daily opportunity scraper for SUBM1T.",
+  "main": "scraper.js",
+  "scripts": {
+    "start": "node scraper.js"
+  },
   "dependencies": {
-    "cheerio": "^1.0.0",
-    "node-fetch": "^2.7.0",
-    "@supabase/supabase-js": "^2.0.0"
+    "@supabase/supabase-js": "^2.39.0"
   }
 }
