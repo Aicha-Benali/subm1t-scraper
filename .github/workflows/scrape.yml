@@ -33,6 +33,13 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SB_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SB_SERVICE_KEY }}
+        
+      -name: Test env in scraper context
+        env:
+          SUPABASE_URL: ${{ secrets.SB_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SB_SERVICE_KEY }}
+        run: node -e "console.log('URL:', process.env.SUPABASE_URL ? process.env.SUPABASE_URL.slice(0,10) : 'EMPTY')"
+        
         run: node scraper.js
 
         
