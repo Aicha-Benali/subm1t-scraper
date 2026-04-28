@@ -21,8 +21,18 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Debug secrets
+        run: |
+          echo "URL length: ${#SUPABASE_URL}"
+          echo "KEY length: ${#SUPABASE_SERVICE_ROLE_KEY}"
+        env:
+          SUPABASE_URL: ${{ secrets.SB_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SB_SERVICE_KEY }}
+
       - name: Run scraper
         env:
           SUPABASE_URL: ${{ secrets.SB_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SB_SERVICE_KEY }}
         run: node scraper.js
+
+        
