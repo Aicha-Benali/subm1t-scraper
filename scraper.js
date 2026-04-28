@@ -1,17 +1,7 @@
 // SUBM1T. — Scraper v2 (Node.js)
-// Runs via GitHub Actions on a daily schedule
-// No Deno, no TypeScript, no external dependencies beyond @supabase/supabase-js
-
 const { createClient } = require("@supabase/supabase-js");
 
-const supabase = createClient(
-  process.env.SB_URL,
-  process.env.SB_SERVICE_KEY
-);
-
-// ── Curated opportunity pool ─────────────────────────────────────────────────
-// These are manually verified, free-to-apply opportunities.
-// Deadlines are set relative to today so they stay fresh on every run.
+let supabase;
 
 function getOpportunities() {
   function monthsOut(n) {
@@ -249,7 +239,6 @@ function getOpportunities() {
   ];
 }
 
-// ── Validation ────────────────────────────────────────────────────────────────
 function isValid(opp) {
   if (!opp.title || opp.title.length < 10) return false;
   if (!opp.link || !opp.link.startsWith("http")) return false;
@@ -261,7 +250,6 @@ function isValid(opp) {
   return true;
 }
 
-// ── Dedup against existing DB entries ────────────────────────────────────────
 async function filterNew(opps) {
   const { data: existing, error } = await supabase
     .from("opportunities")
@@ -270,7 +258,7 @@ async function filterNew(opps) {
 
   if (error) {
     console.error("Could not fetch existing titles:", error.message);
-    return opps; // insert all if we can't check
+    return opps;
   }
 
   const existingTitles = new Set(
@@ -282,7 +270,6 @@ async function filterNew(opps) {
   );
 }
 
-// ── Prune expired ─────────────────────────────────────────────────────────────
 async function pruneExpired() {
   const today = new Date().toISOString().slice(0, 10);
   const { data, error } = await supabase
@@ -299,7 +286,6 @@ async function pruneExpired() {
   return (data || []).length;
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
   console.log("SUBM1T scraper v2 starting...");
 
@@ -308,20 +294,21 @@ async function main() {
     process.exit(1);
   }
 
-  // 1. Prune expired
+  supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+
   const pruned = await pruneExpired();
   console.log("Pruned expired:", pruned);
 
-  // 2. Get and validate opportunities
   const all = getOpportunities();
   const valid = all.filter(isValid);
   console.log("Valid in pool:", valid.length);
 
-  // 3. Filter out ones already in DB
   const fresh = await filterNew(valid);
   console.log("New to insert:", fresh.length);
 
-  // 4. Insert
   if (fresh.length > 0) {
     const { data, error } = await supabase
       .from("opportunities")
