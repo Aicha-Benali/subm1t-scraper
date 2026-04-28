@@ -4,22 +4,11 @@ const { createClient } = require("@supabase/supabase-js");
 let supabase;
 
 function getOpportunities() {
-  function monthsOut(n) {
-    const d = new Date();
-    d.setMonth(d.getMonth() + n);
-    return d.toISOString().slice(0, 10);
-  }
-  function weeksOut(n) {
-    const d = new Date();
-    d.setDate(d.getDate() + n * 7);
-    return d.toISOString().slice(0, 10);
-  }
-
   return [
     {
       title: "MacDowell Artist Residency",
       type: "residency",
-      deadline: monthsOut(3),
+      deadline: "2026-09-15",
       location: "New Hampshire, USA",
       is_remote: false,
       requirements: "All disciplines welcome. Financial assistance available. No application fee.",
@@ -30,7 +19,7 @@ function getOpportunities() {
     {
       title: "Yaddo Artist Residency",
       type: "residency",
-      deadline: monthsOut(4),
+      deadline: "2026-10-01",
       location: "Saratoga Springs, New York",
       is_remote: false,
       requirements: "Professional artists with track record. No application fee.",
@@ -41,7 +30,7 @@ function getOpportunities() {
     {
       title: "Houston Arts Alliance Individual Artist Grant",
       type: "grant",
-      deadline: monthsOut(2),
+      deadline: "2026-07-15",
       location: "Houston, Texas",
       is_remote: false,
       requirements: "Houston residents only. All disciplines. 18+. No application fee.",
@@ -52,7 +41,7 @@ function getOpportunities() {
     {
       title: "NARS Foundation International Artist Residency",
       type: "residency",
-      deadline: monthsOut(2),
+      deadline: "2026-07-01",
       location: "Brooklyn, New York",
       is_remote: false,
       requirements: "International artists welcome. Studio space provided. No application fee.",
@@ -63,7 +52,7 @@ function getOpportunities() {
     {
       title: "Skowhegan School of Painting and Sculpture",
       type: "residency",
-      deadline: weeksOut(8),
+      deadline: "2026-06-20",
       location: "Skowhegan, Maine",
       is_remote: false,
       requirements: "Early career artists. Full scholarships available. No application fee.",
@@ -74,7 +63,7 @@ function getOpportunities() {
     {
       title: "Creative Capital Visual Arts Grant",
       type: "grant",
-      deadline: monthsOut(3),
+      deadline: "2026-08-01",
       location: "USA (national)",
       is_remote: true,
       requirements: "US-based artists. 5+ years practice. Experimental work. No fee.",
@@ -85,7 +74,7 @@ function getOpportunities() {
     {
       title: "Pollock-Krasner Foundation Grant",
       type: "grant",
-      deadline: monthsOut(2),
+      deadline: "2026-07-30",
       location: "International",
       is_remote: true,
       requirements: "Professional painters and sculptors. Merit and financial need. No application fee.",
@@ -96,7 +85,7 @@ function getOpportunities() {
     {
       title: "Headlands Center for the Arts Residency",
       type: "residency",
-      deadline: monthsOut(3),
+      deadline: "2026-09-01",
       location: "Marin Headlands, California",
       is_remote: false,
       requirements: "Emerging and mid-career artists. All disciplines. No application fee.",
@@ -107,7 +96,7 @@ function getOpportunities() {
     {
       title: "Eyebeam Digital Arts Fellowship",
       type: "residency",
-      deadline: monthsOut(2),
+      deadline: "2026-07-10",
       location: "New York City",
       is_remote: false,
       requirements: "NYC-based artists working at intersection of art and technology. No fee.",
@@ -118,7 +107,7 @@ function getOpportunities() {
     {
       title: "New York Foundation for the Arts Fellowship",
       type: "grant",
-      deadline: monthsOut(2),
+      deadline: "2026-07-20",
       location: "New York State",
       is_remote: false,
       requirements: "NY state residents. 7+ years practice. Craft and object-based arts. No fee.",
@@ -129,7 +118,7 @@ function getOpportunities() {
     {
       title: "Rauschenberg Foundation Artist as Activist Fellowship",
       type: "grant",
-      deadline: monthsOut(3),
+      deadline: "2026-08-15",
       location: "International",
       is_remote: true,
       requirements: "Artists using work as a tool for social change. All disciplines. No fee.",
@@ -140,7 +129,7 @@ function getOpportunities() {
     {
       title: "Smack Mellon Open Studio Program",
       type: "residency",
-      deadline: monthsOut(2),
+      deadline: "2026-06-30",
       location: "Brooklyn, New York",
       is_remote: false,
       requirements: "Brooklyn-based emerging artists. Underrepresented artists prioritized. No fee.",
@@ -151,7 +140,7 @@ function getOpportunities() {
     {
       title: "Print Arts Houston Annual Open Call",
       type: "open-call",
-      deadline: monthsOut(2),
+      deadline: "2026-07-05",
       location: "Houston, Texas",
       is_remote: false,
       requirements: "Open to all artists. Prints, drawings, and works on paper. No entry fee.",
@@ -162,7 +151,7 @@ function getOpportunities() {
     {
       title: "Frieze Artist Award",
       type: "open-call",
-      deadline: monthsOut(4),
+      deadline: "2026-10-15",
       location: "International",
       is_remote: true,
       requirements: "Emerging and mid-career artists. Ambitious new work. No application fee.",
@@ -173,7 +162,7 @@ function getOpportunities() {
     {
       title: "Bemis Center for Contemporary Arts Residency",
       type: "residency",
-      deadline: monthsOut(3),
+      deadline: "2026-08-20",
       location: "Omaha, Nebraska",
       is_remote: false,
       requirements: "Professional artists at all career stages. All disciplines. No application fee.",
@@ -184,7 +173,7 @@ function getOpportunities() {
     {
       title: "Djerassi Resident Artists Program",
       type: "residency",
-      deadline: monthsOut(3),
+      deadline: "2026-09-10",
       location: "Woodside, California",
       is_remote: false,
       requirements: "Professional artists. All disciplines. Financial assistance available. No fee.",
@@ -195,7 +184,7 @@ function getOpportunities() {
     {
       title: "Vermont Studio Center Artist Fellowship",
       type: "residency",
-      deadline: monthsOut(2),
+      deadline: "2026-06-15",
       location: "Johnson, Vermont",
       is_remote: false,
       requirements: "All career stages. Full fellowships available. No application fee.",
@@ -206,7 +195,7 @@ function getOpportunities() {
     {
       title: "Elizabeth Foundation for the Arts Studio Program",
       type: "residency",
-      deadline: monthsOut(3),
+      deadline: "2026-08-05",
       location: "New York City",
       is_remote: false,
       requirements: "Emerging NYC-based artists. All disciplines. No application fee.",
@@ -217,7 +206,7 @@ function getOpportunities() {
     {
       title: "Pioneer Works Residency",
       type: "residency",
-      deadline: monthsOut(3),
+      deadline: "2026-09-20",
       location: "Brooklyn, New York",
       is_remote: false,
       requirements: "Artists and scientists working across disciplines. No fee.",
@@ -228,7 +217,7 @@ function getOpportunities() {
     {
       title: "Hambidge Center Artist Residency",
       type: "residency",
-      deadline: monthsOut(2),
+      deadline: "2026-07-25",
       location: "Rabun Gap, Georgia",
       is_remote: false,
       requirements: "Professional artists at all stages. Need-based fellowships available. No fee.",
