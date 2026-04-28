@@ -23,6 +23,6 @@ jobs:
 
       - name: Run scraper
         env:
-          SB_URL: ${{ secrets.SB_URL }}
-          SB_SERVICE_KEY: ${{ secrets.SB_SERVICE_KEY }}
+          SUPABASE_URL: ${{ secrets.SB_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SB_SERVICE_KEY }}
         run: node scraper.js
