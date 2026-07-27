@@ -138,17 +138,6 @@ function getOpportunities() {
       has_fee: false,
     },
     {
-      title: "Print Arts Houston Annual Open Call",
-      type: "open-call",
-      deadline: "2026-07-05",
-      location: "Houston, Texas",
-      is_remote: false,
-      requirements: "Open to all artists. Prints, drawings, and works on paper. No entry fee.",
-      link: "https://printartshouston.org/",
-      tags: ["printmaking", "drawing", "illustration", "houston"],
-      has_fee: false,
-    },
-    {
       title: "Frieze Artist Award",
       type: "open-call",
       deadline: "2026-10-15",
@@ -245,9 +234,23 @@ function looksFeeFree(opp) {
   return true;
 }
 
+// Reject bare-domain links (e.g. "https://example.org" or "https://example.org/") —
+// those send the artist to a homepage or search page instead of the specific call,
+// which is exactly the "I have to click around" problem this guards against.
+function isDeepLink(link) {
+  try {
+    const u = new URL(link);
+    const path = u.pathname.replace(/\/+$/, ""); // strip trailing slash
+    return path.length > 1; // must have more than just "/"
+  } catch (e) {
+    return false;
+  }
+}
+
 function isValid(opp) {
   if (!opp.title || opp.title.length < 10) return false;
   if (!opp.link || !opp.link.startsWith("http")) return false;
+  if (!isDeepLink(opp.link)) return false;
   if (!looksFeeFree(opp)) return false;
   if (opp.deadline) {
     const d = new Date(opp.deadline);
