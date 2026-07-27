@@ -228,10 +228,27 @@ function getOpportunities() {
   ];
 }
 
+// Mission-critical: reject anything that isn't clearly free to enter and free to be selected for.
+// Trusting has_fee alone isn't enough once entries can come from scraped sources where that
+// flag might be missing, wrong, or never set — so we also scan the text itself.
+function looksFeeFree(opp) {
+  if (opp.has_fee) return false;
+  if (opp.has_selection_fee) return false;
+
+  const text = `${opp.requirements || ""} ${opp.title || ""}`.toLowerCase();
+  const mentionsAnyFee = /\$\s?\d|fee\b/.test(text);
+  const explicitlyNoFee = /no\s+(application\s+|entry\s+|submission\s+|jury\s+|selection\s+|processing\s+)?fee/.test(text);
+
+  // A fee is mentioned (e.g. "$25 selection fee") without it being explicitly waived — reject.
+  if (mentionsAnyFee && !explicitlyNoFee) return false;
+
+  return true;
+}
+
 function isValid(opp) {
   if (!opp.title || opp.title.length < 10) return false;
   if (!opp.link || !opp.link.startsWith("http")) return false;
-  if (opp.has_fee) return false;
+  if (!looksFeeFree(opp)) return false;
   if (opp.deadline) {
     const d = new Date(opp.deadline);
     if (isNaN(d.getTime()) || d < new Date()) return false;
