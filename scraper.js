@@ -214,6 +214,17 @@ function getOpportunities() {
       tags: ["painting", "drawing", "sculpture", "photography", "ceramics"],
       has_fee: false,
     },
+    {
+      title: "Nevada County Arts & Culture: Art in Public Spaces Open Call",
+      type: "exhibition",
+      deadline: "2026-08-06",
+      location: "Nevada City, California",
+      is_remote: false,
+      requirements: "Open to the public. Theme: Nevada County's 175th Anniversary. Up to 5 artworks per artist. Artwork submission is free.",
+      link: "https://www.nevadacountyarts.org/call-to-artists/open-call-art-in-public-spaces",
+      tags: ["painting", "drawing", "photography", "sculpture", "mixed media"],
+      has_fee: false,
+    },
   ];
 }
 
