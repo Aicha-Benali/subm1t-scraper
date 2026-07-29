@@ -15,8 +15,21 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: npm install
+      - name: Decide whether to run Tier 3 (AI discovery) today
+        id: gate
+        run: |
+          # Tier 1 (structured sources + program-page re-checks) runs every day.
+          # Tier 3 (AI web-search discovery) only runs on Mondays to keep API
+          # spend down — remove this whole step and always export the key
+          # below if you'd rather run it daily.
+          if [ "$(date +%u)" = "1" ]; then
+            echo "run_ai=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_ai=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Run scraper
         env:
-          SUPABASE_URL: ${{ secrets.SB_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SB_SERVICE_KEY }}
-        run: node scraper.js
+          SB_URL: ${{ secrets.SB_URL }}
+          SB_SERVICE_KEY: ${{ secrets.SB_SERVICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ steps.gate.outputs.run_ai == 'true' && secrets.ANTHROPIC_API_KEY || '' }}
+        run: node index.js
