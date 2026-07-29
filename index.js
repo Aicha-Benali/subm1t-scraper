@@ -12,7 +12,7 @@
 
 const fetch = require("node-fetch");
 const { createClient } = require("@supabase/supabase-js");
-const { isValid } = require("./lib/validate");
+const { isValid, normalizeTitle } = require("./lib/validate");
 const {
   scrapeSubmittable,
   scrapeGrantsArt,
@@ -26,7 +26,7 @@ const {
   scrapeSinglePage,
   SINGLE_PROGRAM_PAGES,
 } = require("./lib/sources");
-const { discoverViaAI, DEFAULT_QUERIES } = require("./lib/discover");
+const { discoverViaAI, pickWeeklyQueries } = require("./lib/discover");
 
 const supabase = createClient(process.env.SB_URL, process.env.SB_SERVICE_KEY);
 
@@ -73,9 +73,13 @@ async function run() {
   if (process.env.ANTHROPIC_API_KEY) {
     console.log("[SUBM1T] Tier 3: AI-assisted discovery...");
     try {
+      // 8 queries/week, rotating through the ~36-query pool over about 4-5 weeks.
+      // Bump the first argument if you want broader coverage per run (costs more API calls).
+      const queries = pickWeeklyQueries(8);
+      console.log(`  [discover] this week's queries: ${queries.join(" | ")}`);
       const discovered = await discoverViaAI(fetch, {
         anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-        queries: DEFAULT_QUERIES,
+        queries,
       });
       console.log(`  [discover] ${discovered.length} candidates returned`);
       allResults.push(...discovered);
@@ -103,6 +107,29 @@ async function run() {
 
   if (clean.length === 0) {
     console.log("[SUBM1T] Nothing to write. Done.");
+    return;
+  }
+
+  // --- Cross-run duplicate check ---
+  // The within-run dedup above only catches duplicates found in the SAME run. Without this
+  // step, the same opportunity found today by one source and again next week by a different
+  // source (e.g. a program-page re-check vs. an AI-discovery hit) would insert as a second row,
+  // since the upsert's conflict target can't help until we know what's already in the table.
+  const { data: existingRows, error: existingErr } = await supabase
+    .from("opportunities")
+    .select("title")
+    .limit(2000);
+
+  if (existingErr) {
+    console.warn("[SUBM1T] Could not fetch existing titles, skipping cross-run dedup:", existingErr.message);
+  }
+
+  const existingNormalized = new Set((existingRows || []).map((r) => normalizeTitle(r.title)));
+  const toWrite = clean.filter((o) => !existingNormalized.has(normalizeTitle(o.title)));
+  console.log(`[SUBM1T] ${toWrite.length} genuinely new after cross-run dedup (${clean.length - toWrite.length} already in DB)`);
+
+  if (toWrite.length === 0) {
+    console.log("[SUBM1T] Nothing new to write. Done.");
     return;
   }
 
@@ -142,15 +169,17 @@ async function run() {
   else console.log(`[SUBM1T] Pruned ${(prunedRows || []).length} expired rows`);
 
   // --- Upsert in batches of 50 ---
-  // NOTE: requires a unique constraint on (title, source) in the `opportunities`
-  // table for onConflict to behave as an upsert rather than a plain insert.
-  // In Supabase SQL editor: ALTER TABLE opportunities ADD CONSTRAINT opportunities_title_source_key UNIQUE (title, source);
+  // NOTE: conflict target is `title` ALONE now (not title+source) — the same opportunity
+  // found by two different sources should collide and skip, not create a second row.
+  // Requires a unique constraint on `title` in the `opportunities` table:
+  //   ALTER TABLE opportunities ADD CONSTRAINT opportunities_title_key UNIQUE (title);
+  // (see the SQL cleanup steps for removing any pre-existing duplicate titles first)
   let inserted = 0;
-  for (let i = 0; i < clean.length; i += 50) {
-    const batch = clean.slice(i, i + 50);
+  for (let i = 0; i < toWrite.length; i += 50) {
+    const batch = toWrite.slice(i, i + 50);
     const { error } = await supabase
       .from("opportunities")
-      .upsert(batch, { onConflict: "title,source", ignoreDuplicates: true });
+      .upsert(batch, { onConflict: "title", ignoreDuplicates: true });
     if (error) {
       console.warn(`[SUBM1T] Upsert error (batch ${Math.floor(i / 50) + 1}):`, error.message);
     } else {
