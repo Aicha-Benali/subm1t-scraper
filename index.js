@@ -1,7 +1,18 @@
-// index.js — SUBM1T. scraper entry point
+// index.js — SUBM1T. scraper entry point.
+//
+// This is now the ONE script the workflow runs (previously the workflow ran
+// scraper.js, a hardcoded static list, while this file — with the real scraping
+// logic — was never actually invoked). Pipeline:
+//   Tier 1: structured listing sources + re-checked single program pages
+//   Tier 3: AI web-search discovery (only if ANTHROPIC_API_KEY is set)
+//   -> shared isValid() gate (fee-free, deep link, future deadline) on EVERYTHING
+//   -> dedup by title
+//   -> junk cleanup + expired prune
+//   -> batched upsert
 
-const fetch = require('node-fetch');
-const { createClient } = require('@supabase/supabase-js');
+const fetch = require("node-fetch");
+const { createClient } = require("@supabase/supabase-js");
+const { isValid } = require("./lib/validate");
 const {
   scrapeSubmittable,
   scrapeGrantsArt,
@@ -14,7 +25,8 @@ const {
   scrapeTransArtists,
   scrapeSinglePage,
   SINGLE_PROGRAM_PAGES,
-} = require('./scraper');
+} = require("./lib/sources");
+const { discoverViaAI, DEFAULT_QUERIES } = require("./lib/discover");
 
 const supabase = createClient(process.env.SB_URL, process.env.SB_SERVICE_KEY);
 
@@ -23,8 +35,8 @@ async function run() {
 
   const allResults = [];
 
-  // Structured/API sources first
-  console.log('[SUBM1T] Scraping structured sources...');
+  // --- Tier 1a: structured/listing sources ---
+  console.log("[SUBM1T] Tier 1: scraping structured sources...");
   const structured = await Promise.allSettled([
     scrapeSubmittable(fetch),
     scrapeGrantsArt(fetch),
@@ -38,74 +50,109 @@ async function run() {
   ]);
 
   structured.forEach((result, i) => {
-    if (result.status === 'fulfilled') {
-      console.log(`  [source ${i+1}] ${result.value.length} opportunities`);
+    if (result.status === "fulfilled") {
+      console.log(`  [source ${i + 1}] ${result.value.length} opportunities`);
       allResults.push(...result.value);
     } else {
-      console.warn(`  [source ${i+1}] failed:`, result.reason?.message);
+      console.warn(`  [source ${i + 1}] failed:`, result.reason?.message);
     }
   });
 
-  // Individual program pages — polite delay between each
-  console.log(`[SUBM1T] Scraping ${SINGLE_PROGRAM_PAGES.length} program pages...`);
+  // --- Tier 1b: re-check known single program pages (live deadline/fee scan) ---
+  console.log(`[SUBM1T] Tier 1: re-checking ${SINGLE_PROGRAM_PAGES.length} program pages...`);
   for (const config of SINGLE_PROGRAM_PAGES) {
     const results = await scrapeSinglePage(fetch, config);
     if (results.length > 0) {
-      console.log(`  [${config.source}] ${results.length} found`);
+      console.log(`  [${config.source}] still open, deadline ${results[0].deadline}`);
       allResults.push(...results);
     }
-    await new Promise(r => setTimeout(r, 400)); // polite delay
+    await new Promise((r) => setTimeout(r, 400)); // polite delay
   }
 
-  // Final dedup across all sources by title
+  // --- Tier 3: AI-assisted web search discovery ---
+  if (process.env.ANTHROPIC_API_KEY) {
+    console.log("[SUBM1T] Tier 3: AI-assisted discovery...");
+    try {
+      const discovered = await discoverViaAI(fetch, {
+        anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+        queries: DEFAULT_QUERIES,
+      });
+      console.log(`  [discover] ${discovered.length} candidates returned`);
+      allResults.push(...discovered);
+    } catch (err) {
+      console.warn("[SUBM1T] Tier 3 failed:", err.message);
+    }
+  } else {
+    console.log("[SUBM1T] Skipping Tier 3 — no ANTHROPIC_API_KEY secret set.");
+  }
+
+  // --- Shared validation gate — applies to every result regardless of source ---
+  console.log(`[SUBM1T] ${allResults.length} raw results before validation`);
+  const valid = allResults.filter(isValid);
+  console.log(`[SUBM1T] ${valid.length} pass validation (fee-free, deep link, future deadline)`);
+
+  // --- Dedup across all sources by title ---
   const seen = new Set();
-  const clean = allResults.filter(o => {
-    if (!o || !o.title) return false;
+  const clean = valid.filter((o) => {
     const key = o.title.toLowerCase().slice(0, 80);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-
   console.log(`[SUBM1T] ${clean.length} unique opportunities after dedup`);
 
   if (clean.length === 0) {
-    console.log('[SUBM1T] Nothing to write. Done.');
+    console.log("[SUBM1T] Nothing to write. Done.");
     return;
   }
 
-  // Wipe old junk rows that slipped in from previous runs
+  // --- Wipe old junk rows that slipped in from previous runs ---
   const { error: delError } = await supabase
-    .from('opportunities')
+    .from("opportunities")
     .delete()
-    .or([
-      'title.ilike.%instagram%',
-      'title.ilike.%facebook%',
-      'title.ilike.%subscribe%',
-      'title.ilike.%newsletter%',
-      'title.ilike.%follow us%',
-      'title.ilike.%privacy policy%',
-      'title.ilike.%cookie policy%',
-      'title.ilike.%contact us%',
-      'title.ilike.%birth certificate%',
-      'title.ilike.%our campus%',
-      'title.ilike.%back to top%',
-      'title.ilike.%sportico%',
-      'title.ilike.%robbreport%',
-      'title.ilike.%indiewire%',
-    ].join(','));
+    .or(
+      [
+        "title.ilike.%instagram%",
+        "title.ilike.%facebook%",
+        "title.ilike.%subscribe%",
+        "title.ilike.%newsletter%",
+        "title.ilike.%follow us%",
+        "title.ilike.%privacy policy%",
+        "title.ilike.%cookie policy%",
+        "title.ilike.%contact us%",
+        "title.ilike.%birth certificate%",
+        "title.ilike.%our campus%",
+        "title.ilike.%back to top%",
+        "title.ilike.%sportico%",
+        "title.ilike.%robbreport%",
+        "title.ilike.%indiewire%",
+      ].join(",")
+    );
+  if (delError) console.warn("[SUBM1T] Cleanup delete error:", delError.message);
 
-  if (delError) console.warn('[SUBM1T] Cleanup delete error:', delError.message);
+  // --- Prune expired deadlines (moved here from scraper.js v2 so it always runs) ---
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: prunedRows, error: pruneError } = await supabase
+    .from("opportunities")
+    .delete()
+    .lt("deadline", today)
+    .not("deadline", "is", null)
+    .select("id");
+  if (pruneError) console.warn("[SUBM1T] Prune error:", pruneError.message);
+  else console.log(`[SUBM1T] Pruned ${(prunedRows || []).length} expired rows`);
 
-  // Upsert in batches of 50
+  // --- Upsert in batches of 50 ---
+  // NOTE: requires a unique constraint on (title, source) in the `opportunities`
+  // table for onConflict to behave as an upsert rather than a plain insert.
+  // In Supabase SQL editor: ALTER TABLE opportunities ADD CONSTRAINT opportunities_title_source_key UNIQUE (title, source);
   let inserted = 0;
   for (let i = 0; i < clean.length; i += 50) {
     const batch = clean.slice(i, i + 50);
     const { error } = await supabase
-      .from('opportunities')
-      .upsert(batch, { onConflict: 'title,source', ignoreDuplicates: true });
+      .from("opportunities")
+      .upsert(batch, { onConflict: "title,source", ignoreDuplicates: true });
     if (error) {
-      console.warn(`[SUBM1T] Upsert error (batch ${Math.floor(i/50)+1}):`, error.message);
+      console.warn(`[SUBM1T] Upsert error (batch ${Math.floor(i / 50) + 1}):`, error.message);
     } else {
       inserted += batch.length;
     }
@@ -114,7 +161,7 @@ async function run() {
   console.log(`[SUBM1T] Done. ${inserted} rows written.`);
 }
 
-run().catch(err => {
-  console.error('[SUBM1T] Fatal error:', err);
+run().catch((err) => {
+  console.error("[SUBM1T] Fatal error:", err);
   process.exit(1);
 });
